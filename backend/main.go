@@ -24,7 +24,7 @@ func telemetryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("received telemtry from %s: %s", t.DeviceID, t.Message)
+	log.Printf("received telemetry from %s: %s", t.DeviceID, t.Message)
 	w.WriteHeader(http.StatusOK)
 }
 

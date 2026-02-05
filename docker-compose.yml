@@ -13,3 +13,9 @@ services:
       context: ./device-sim
     depends_on:
       - backend
+  ota-server:
+    image: platform-ota:latest
+    build:
+      context: ./ota-server
+    ports:
+      - "8081:8081"
