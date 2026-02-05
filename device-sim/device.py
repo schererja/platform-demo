@@ -1,6 +1,11 @@
 import uuid
 import requests
 import time
+import base64
+from typing import Optional
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import padding
 
 DEVICE_ID = str(uuid.uuid4())
 BACKEND_URL = "http://backend:8080/telemetry"
@@ -8,6 +13,18 @@ OTA_MANIFEST_URL = "http://ota-server:8081/manifest"
 OTA_DOWNLOAD_TIMEOUT = 5
 
 current_version = "1.0.0"
+
+PUBLIC_KEY: Optional[rsa.RSAPublicKey] = None
+PUBLIC_KEY_PATH = "/keys/public.pem"
+
+
+def load_public_key() -> rsa.RSAPublicKey:
+    with open(PUBLIC_KEY_PATH, "rb") as f:
+        data = f.read()
+    key = serialization.load_pem_public_key(data)
+    if not isinstance(key, rsa.RSAPublicKey):
+        raise ValueError("Loaded key is not an RSA public key")
+    return key
 
 
 def send_telemetry():
@@ -50,6 +67,28 @@ def check_for_ota_update():
     download_and_apply_update(firmware_url, available_version, signature)
 
 
+def verify_signature(data: bytes, signature_b64: str) -> bool:
+    if PUBLIC_KEY is None:
+        print("Public key not loaded, cannot verify signature", flush=True)
+        return False
+    try:
+        sig = base64.b64decode(signature_b64)
+    except Exception as e:
+        print(f"Failed to decode signature: {e}", flush=True)
+        return False
+    try:
+        PUBLIC_KEY.verify(
+            sig,
+            data,
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return True
+    except Exception as e:
+        print(f"Signature verification failed: {e}", flush=True)
+    return False
+
+
 def download_and_apply_update(url: str, version: str, signature: str):
     global current_version
 
@@ -65,7 +104,7 @@ def download_and_apply_update(url: str, version: str, signature: str):
         print(f"Failed to download firmware: {e}", flush=True)
         return
 
-    if signature != "2dc9e2c8-c63c-441b-b805-ecfd5624f8ed":
+    if not verify_signature(data, signature):
         print("Firmware signature verification failed, update aborted", flush=True)
         return
 
@@ -77,6 +116,8 @@ def download_and_apply_update(url: str, version: str, signature: str):
 
 
 def main_loop():
+    global PUBLIC_KEY
+    PUBLIC_KEY = load_public_key()
     print("Starting device simulator main loop", flush=True)
     counter = 0
     while True:
