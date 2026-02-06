@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -14,6 +15,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 )
 
 type Manifest struct {
@@ -81,7 +88,7 @@ func manifestHandler(privateKey *rsa.PrivateKey) http.HandlerFunc {
 			return
 		}
 		manifest := Manifest{
-			Version:   "1.1.1",
+			Version:   "1.1.2",
 			URL:       "http://ota-server:8081/firmware.bin",
 			Signature: sig,
 		}
@@ -93,14 +100,96 @@ func manifestHandler(privateKey *rsa.PrivateKey) http.HandlerFunc {
 func firmwareHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "firmware.bin")
 }
+func otaCheckHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("ota-server").Start(r.Context(), "otaCheckHandler")
+	defer span.End()
 
+	deviceID := r.URL.Query().Get("device_id")
+	currentVersion := r.URL.Query().Get("current_version")
+	latestVersion := "1.1.2"
+
+	updateAvailable := currentVersion != latestVersion
+	response := map[string]interface{}{
+		"update_available": updateAvailable,
+		"latest_version":   latestVersion,
+		"url":              "http://ota-server:8081/firmware/" + latestVersion,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	span.SetAttributes(
+		semconv.ClientAddress(deviceID),
+	)
+	json.NewEncoder(w).Encode(response)
+	log.Printf("Received OTA check from device %s with current version %s", deviceID, currentVersion)
+
+}
+func otaApplyHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("ota-server").Start(r.Context(), "otaApplyHandler")
+	defer span.End()
+
+	var body struct {
+		DeviceID string `json:"device_id"`
+		Version  string `json:"version"`
+	}
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	resp := map[string]string{
+		"status":  "success",
+		"version": body.Version,
+	}
+
+	err = json.NewEncoder(w).Encode(resp)
+	if err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+func initTracer() (*sdktrace.TracerProvider, error) {
+	ctx := context.Background()
+
+	endpoing := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if endpoing == "" {
+		endpoing = "otel-collector:4318"
+	}
+
+	exporter, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithInsecure(),
+		otlptracehttp.WithEndpoint(endpoing),
+		otlptracehttp.WithURLPath("/v1/traces"),
+	)
+	if err != nil {
+		log.Fatalf("failed to initialize OTLP exporter: %v", err)
+		return nil, err
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName("ota-server"),
+		)),
+	)
+	otel.SetTracerProvider(tp)
+	return tp, nil
+}
 func main() {
 	privateKey, err := loadPrivateKey("/keys/private.pem")
 	if err != nil {
 		log.Fatalf("Failed to load private key: %v", err)
 	}
+	tp, err := initTracer()
+	if err != nil {
+		log.Fatalf("failed to initialize tracer: %v", err)
+		os.Exit(1)
+	}
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 	http.HandleFunc("/manifest", manifestHandler(privateKey))
 	http.HandleFunc("/firmware.bin", firmwareHandler)
+	http.HandleFunc("/ota/check", otaCheckHandler)
+	http.HandleFunc("/ota/apply", otaApplyHandler)
 	log.Println("OTA server listening on :8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
 }

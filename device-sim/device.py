@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 
 DEVICE_ID = str(uuid.uuid4())
-BACKEND_URL = "http://backend:8080/telemetry"
+BACKEND_URL = "http://backend:8000/telemetry"
 OTA_MANIFEST_URL = "http://ota-server:8081/manifest"
 OTA_DOWNLOAD_TIMEOUT = 5
 

@@ -1,5 +1,5 @@
 # --- build stage
-FROM golang:1.22 AS builder
+FROM golang:1.25 AS builder
 
 WORKDIR /app
 COPY . .
@@ -14,5 +14,5 @@ FROM gcr.io/distroless/base-debian12
 WORKDIR /app
 COPY --from=builder /app/backend .
 
-EXPOSE 8080
+EXPOSE 8000
 ENTRYPOINT [ "./backend" ]
